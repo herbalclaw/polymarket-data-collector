@@ -13,6 +13,7 @@ Strategies:
 import json
 import time
 import asyncio
+import sys
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
@@ -20,6 +21,10 @@ from collections import deque
 
 from price_aggregator import MultiExchangeAggregator, PriceData
 from sentiment_analyzer import NewsSentimentAnalyzer
+
+# Force unbuffered output
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 
 
 @dataclass
@@ -280,12 +285,12 @@ class PaperTrader:
         self.active_trade = trade
         self.trades.append(trade)
         
-        print(f"\n📈 PAPER TRADE OPENED")
-        print(f"   Strategy: {signal['strategy']}")
-        print(f"   Side: {signal['signal'].upper()}")
-        print(f"   Entry: ${current_price:,.2f}")
-        print(f"   Confidence: {signal['confidence']:.1%}")
-        print(f"   Reason: {signal['reason']}")
+        print(f"\n📈 PAPER TRADE OPENED", flush=True)
+        print(f"   Strategy: {signal['strategy']}", flush=True)
+        print(f"   Side: {signal['signal'].upper()}", flush=True)
+        print(f"   Entry: ${current_price:,.2f}", flush=True)
+        print(f"   Confidence: {signal['confidence']:.1%}", flush=True)
+        print(f"   Reason: {signal['reason']}", flush=True)
     
     def close_trade(self, exit_price: float, reason: str):
         """Close the active paper trade."""
@@ -315,18 +320,18 @@ class PaperTrader:
         
         perf.total_pnl += trade.pnl
         
-        print(f"\n📉 PAPER TRADE CLOSED")
-        print(f"   Strategy: {trade.strategy}")
-        print(f"   P&L: {trade.pnl:+.3f}%")
-        print(f"   Reason: {reason}")
+        print(f"\n📉 PAPER TRADE CLOSED", flush=True)
+        print(f"   Strategy: {trade.strategy}", flush=True)
+        print(f"   P&L: {trade.pnl:+.3f}%", flush=True)
+        print(f"   Reason: {reason}", flush=True)
         
         self.active_trade = None
     
     def print_performance(self):
         """Print strategy performance summary."""
-        print("\n" + "="*70)
-        print("PAPER TRADING PERFORMANCE")
-        print("="*70)
+        print("\n" + "="*70, flush=True)
+        print("PAPER TRADING PERFORMANCE", flush=True)
+        print("="*70, flush=True)
         
         for name, perf in self.strategy_performance.items():
             if perf.total_trades > 0:
@@ -345,18 +350,18 @@ class PaperTrader:
     
     async def run(self):
         """Main paper trading loop."""
-        print("="*70)
-        print("PAPER TRADING BOT - Multi-Strategy")
-        print("Testing strategies without real money")
-        print("="*70)
+        print("="*70, flush=True)
+        print("PAPER TRADING BOT - Multi-Strategy", flush=True)
+        print("Testing strategies without real money", flush=True)
+        print("="*70, flush=True)
         
         cycle = 0
         
         while True:
             cycle += 1
-            print(f"\n{'='*70}")
-            print(f"Cycle {cycle} - {datetime.now().strftime('%H:%M:%S')}")
-            print(f"{'='*70}")
+            print(f"\n{'='*70}", flush=True)
+            print(f"Cycle {cycle} - {datetime.now().strftime('%H:%M:%S')}", flush=True)
+            print(f"{'='*70}", flush=True)
             
             # Fetch prices
             await self.aggregator.fetch_all_prices()
@@ -376,21 +381,21 @@ class PaperTrader:
                 
                 current_price = metrics['price_stats']['vwap']
                 
-                print(f"\nAggregated BTC Price: ${current_price:,.2f}")
-                print(f"Spread: {metrics['spread_stats']['effective_spread']:.2f} bps")
-                print(f"Exchanges: {len(self.aggregator.prices)}")
+                print(f"\nAggregated BTC Price: ${current_price:,.2f}", flush=True)
+                print(f"Spread: {metrics['spread_stats']['effective_spread']:.2f} bps", flush=True)
+                print(f"Exchanges: {len(self.aggregator.prices)}", flush=True)
                 
                 # Show sentiment
-                print(f"\n📰 Sentiment: {sentiment_data['overall'].upper()} ({sentiment_data['confidence']:.1%})")
-                print(f"   Bullish: {sentiment_data['bullish_count']}, Bearish: {sentiment_data['bearish_count']}")
+                print(f"\n📰 Sentiment: {sentiment_data['overall'].upper()} ({sentiment_data['confidence']:.1%})", flush=True)
+                print(f"   Bullish: {sentiment_data['bullish_count']}, Bearish: {sentiment_data['bearish_count']}", flush=True)
                 
                 # Evaluate strategies
                 signals = self.evaluate_strategies()
                 
                 if signals:
-                    print(f"\n🎯 STRATEGY SIGNALS ({len(signals)}):")
+                    print(f"\n🎯 STRATEGY SIGNALS ({len(signals)}):", flush=True)
                     for sig in signals:
-                        print(f"   [{sig['strategy']}] {sig['signal'].upper()} @ {sig['confidence']:.1%}")
+                        print(f"   [{sig['strategy']}] {sig['signal'].upper()} @ {sig['confidence']:.1%}", flush=True)
                     
                     # Take the highest confidence signal
                     best_signal = max(signals, key=lambda x: x['confidence'])
@@ -408,6 +413,8 @@ class PaperTrader:
                 # Print performance every 10 cycles
                 if cycle % 10 == 0:
                     self.print_performance()
+            else:
+                print("⚠️  Insufficient data from exchanges", flush=True)
             
             await asyncio.sleep(5)  # 5-second intervals
 
@@ -417,5 +424,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(trader.run())
     except KeyboardInterrupt:
-        print("\n\nStopping paper trader...")
+        print("\n\nStopping paper trader...", flush=True)
         trader.print_performance()
