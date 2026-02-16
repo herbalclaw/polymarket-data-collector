@@ -1,14 +1,25 @@
-# Polymarket Data Collector
+# Polymarket BTC 5-Min Data Collector
 
-Continuous high-frequency data collection for Polymarket BTC 5-minute markets.
+Continuous high-frequency data collection for Polymarket **BTC 5-minute up/down markets**.
+
+> **Note:** Currently only BTC has 5-minute prediction markets on Polymarket. ETH and SOL markets are not available.
 
 ## Features
 
 - **Millisecond precision**: Captures every price change at 10-100Hz
 - **Dual collection**: WebSocket + REST polling for maximum coverage
-- **Efficient storage**: Custom binary format (~24 bytes per update)
+- **Efficient storage**: Optimized SQLite schema (~80 bytes per update)
 - **Duplicate filtering**: Only stores price changes, not redundant data
+- **Auto-push to GitHub**: Commits data every 5 minutes
 - **Backtest-ready**: Easy export to pandas/NumPy
+
+## Supported Markets
+
+| Asset | Market Type | Status |
+|-------|-------------|--------|
+| BTC   | 5-min Up/Down | ✅ Active |
+| ETH   | 5-min Up/Down | ❌ Not available on Polymarket |
+| SOL   | 5-min Up/Down | ❌ Not available on Polymarket |
 
 ## Collection Modes
 
@@ -26,64 +37,6 @@ python collector.py --interval 5  # 5 second snapshots
 
 Lower frequency for basic analysis.
 
-## Storage Formats
-
-| Format | Size per Update | Use Case |
-|--------|-----------------|----------|
-| Binary (custom) | 24 bytes | Long-term storage |
-| HDF5 | ~40 bytes | Analysis with pandas |
-| SQLite | ~80 bytes | Querying with SQL |
-
-## Quick Start
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Run high-frequency collector
-python collector_hf.py --interval 100
-
-# In another terminal: monitor stats
-python export.py --stats
-```
-
-## Data Schema
-
-Each price update contains:
-- `timestamp_ms`: Millisecond-precision timestamp
-- `bid/ask/mid`: Orderbook prices
-- `spread_bps`: Spread in basis points
-- `bid_depth/ask_depth`: Liquidity at best level
-- `source`: 'websocket' or 'rest'
-
-## Storage Size Estimate
-
-At 100Hz (100ms polling):
-- ~600 updates per minute per side (up/down)
-- ~1,200 updates per minute total
-- ~72,000 updates per hour
-- ~1.7 MB per hour (binary format)
-- ~40 MB per day
-- ~1.2 GB per month
-
-## GitHub Actions
-
-The `.github/workflows/collect.yml` runs continuous collection every 5 minutes.
-
-## Repository Structure
-
-```
-.
-├── collector.py          # Main data collection daemon
-├── export.py             # Export to Parquet
-├── backtest.py           # Backtesting utilities
-├── requirements.txt      # Python dependencies
-├── .env.example          # Configuration template
-├── data/
-│   └── raw/              # SQLite databases (gitignored)
-└── data/parquet/         # Exported Parquet files
-```
-
 ## Quick Start
 
 ### 1. Install Dependencies
@@ -94,64 +47,142 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Configure
+### 2. Start Collecting (with auto-push)
 
 ```bash
-cp .env.example .env
-# Edit .env with your settings (optional)
+# Start collector + auto-push to GitHub every 5 mins
+./start_with_push.sh
 ```
 
-### 3. Start Collecting
-
+Or manually:
 ```bash
-python collector.py
+# Start collector
+python collector_hf.py --interval 100
+
+# In another terminal: auto-push loop
+while true; do
+    sleep 300
+    git add data/raw/btc_hf_data.db
+    git commit -m "Data update: $(date -u +%Y-%m-%d-%H:%M:%S)"
+    git push origin master
+done
 ```
 
-Data will be saved to `data/raw/polymarket_data.db`
+## Data Storage
 
-### 4. Export to Parquet (for analysis)
+**Location:** `data/raw/btc_hf_data.db`
 
-```bash
-python export.py --month 2026-02
+**Tables:**
+- `markets` - Market metadata (timestamp, token IDs, resolution)
+- `price_updates` - Millisecond price data
+
+**Schema (price_updates):**
+| Column | Type | Description |
+|--------|------|-------------|
+| `timestamp_ms` | INTEGER | Millisecond-precision timestamp |
+| `market_ts` | INTEGER | Market start timestamp (5-min window) |
+| `asset` | TEXT | 'BTC' |
+| `side` | TEXT | 'up' or 'down' |
+| `bid` | INTEGER | Bid price (scaled by 1e6) |
+| `ask` | INTEGER | Ask price (scaled by 1e6) |
+| `mid` | INTEGER | Mid price (scaled by 1e6) |
+| `spread_bps` | INTEGER | Spread in basis points |
+| `bid_depth` | REAL | USD depth at best bid |
+| `ask_depth` | REAL | USD depth at best ask |
+| `source` | TEXT | 'rest' or 'websocket' |
+
+## Storage Size Estimate
+
+At **100Hz polling** (100ms intervals):
+
+| Metric | Value |
+|--------|-------|
+| Updates/minute | ~1,200 (both up/down sides) |
+| Updates/hour | ~72,000 |
+| SQLite size | ~5 MB/hour |
+| Daily size | ~120 MB/day |
+| Monthly size | ~3.6 GB/month |
+
+## Querying Data
+
+```python
+import sqlite3
+import pandas as pd
+
+conn = sqlite3.connect('data/raw/btc_hf_data.db')
+
+# Get all price updates for current market
+df = pd.read_sql('''
+    SELECT 
+        datetime(timestamp_ms/1000, 'unixepoch') as time,
+        side,
+        bid / 1000000.0 as bid,
+        ask / 1000000.0 as ask,
+        mid / 1000000.0 as mid
+    FROM price_updates
+    ORDER BY timestamp_ms DESC
+    LIMIT 1000
+''', conn)
+
+# Get market outcomes
+outcomes = pd.read_sql('''
+    SELECT 
+        datetime(timestamp, 'unixepoch') as market_time,
+        outcome,
+        datetime(resolved_at, 'unixepoch') as resolved_time
+    FROM markets
+    WHERE outcome IS NOT NULL
+    ORDER BY timestamp DESC
+''', conn)
 ```
-
-## Data Schema
-
-### Orderbook Snapshots
-- `market_ts`: Market start timestamp
-- `asset`: BTC, ETH, or SOL
-- `bid/ask/mid`: Prices (6 decimal precision)
-- `bid_depth/ask_depth`: Liquidity at best level
-- `spread_bps`: Spread in basis points
-
-### Market Resolutions
-- `timestamp`: Market start
-- `asset`: BTC, ETH, or SOL
-- `outcome`: up/down resolution
-- `resolved_at`: When it resolved
 
 ## Backtesting
 
 ```python
-from backtest import load_data
+from backtest import load_data, streak_strategy
 
-# Load all BTC data
+# Load BTC data
 df = load_data('BTC', start='2026-02-01', end='2026-02-15')
 
-# Run your strategy
-results = backtest_streak_strategy(df, trigger=4)
+# Run streak reversal backtest
+result = streak_strategy(df, trigger=4, bet_amount=5.0)
+print(f"Win rate: {result.win_rate:.1%}, PnL: ${result.total_pnl:+.2f}")
 ```
 
-## Storage Size
+## Export to Parquet
 
-| Asset | Snapshots/Day | Daily Size | Monthly Size |
-|-------|---------------|------------|--------------|
-| BTC   | ~2,880        | ~5 MB      | ~150 MB      |
-| ETH   | ~2,880        | ~5 MB      | ~150 MB      |
-| SOL   | ~2,880        | ~5 MB      | ~150 MB      |
-| **Total** | **~8,640** | **~15 MB** | **~450 MB** |
+```bash
+# Export monthly data for analysis
+python export.py --month 2026-02
 
-Parquet export: ~90 MB/month (compressed)
+# Output: data/parquet/BTC_5min_2026-02.parquet
+```
+
+## Repository Structure
+
+```
+.
+├── collector_hf.py       # High-frequency collector (100ms)
+├── collector.py          # Standard collector (5s)
+├── export.py             # Export to Parquet
+├── backtest.py           # Backtesting utilities
+├── storage.py            # Binary storage format
+├── start_with_push.sh    # Start collector + auto-push
+├── requirements.txt      # Python dependencies
+├── .env.example          # Configuration template
+└── data/
+    └── raw/
+        └── btc_hf_data.db    # SQLite database (gitignored)
+```
+
+## GitHub Auto-Push
+
+The repository includes a script (`start_with_push.sh`) that:
+1. Starts the high-frequency collector
+2. Commits the database to GitHub every 5 minutes
+3. Logs all activity
+
+This ensures your data is backed up and versioned.
 
 ## License
 
