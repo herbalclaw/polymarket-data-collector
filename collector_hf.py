@@ -235,7 +235,7 @@ class HighFrequencyCollector:
             resp = self.session.get(
                 f"{self.CLOB_API}/book",
                 params={"token_id": token_id},
-                timeout=2
+                timeout=5  # Increased from 2s
             )
             resp.raise_for_status()
             book = resp.json()
@@ -443,8 +443,8 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser()
-    parser.add_argument("--interval", type=float, default=100,
-                       help="Poll interval in milliseconds (default: 100ms = 10Hz)")
+    parser.add_argument("--interval", type=float, default=1000,
+                       help="Poll interval in milliseconds (default: 1000ms = 1Hz)")
     parser.add_argument("--db", default=None,
                        help="Database path (auto-rotates every 12 hours if not specified)")
     args = parser.parse_args()
