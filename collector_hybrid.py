@@ -289,7 +289,7 @@ class HybridCollector:
                         await asyncio.sleep(5)
                         continue
                     
-                    # Subscribe to both tokens
+                    # Subscribe to market channel (not orderbook)
                     for token_id, side in [
                         (market.get('up_token_id'), 'up'),
                         (market.get('down_token_id'), 'down')
@@ -297,7 +297,7 @@ class HybridCollector:
                         if token_id:
                             await ws.send(json.dumps({
                                 "type": "subscribe",
-                                "channel": "orderbook",
+                                "channel": "market",
                                 "market": token_id
                             }))
                             logger.info(f"Subscribed to {side}: {token_id[:20]}...")
@@ -326,17 +326,34 @@ class HybridCollector:
             reconnect_delay = min(reconnect_delay * 2, 60)
     
     async def _process_ws_message(self, data: dict):
-        """Process WebSocket message."""
-        if data.get('type') != 'orderbook_update':
-            return
+        """Process WebSocket message - handles multiple event types."""
+        event_type = data.get('event_type', '')
         
-        token_id = data.get('market', '')
-        timestamp = int(time.time() * 1000)
+        if event_type == 'book':
+            # Full orderbook update
+            await self._process_book_message(data)
+        elif event_type == 'price_change':
+            # Price change update
+            await self._process_price_change(data)
+        elif event_type == 'last_trade_price':
+            # Trade executed
+            logger.debug(f"Trade: {data.get('side')} {data.get('size')} @ {data.get('price')}")
+        elif event_type == 'best_bid_ask':
+            # Best bid/ask update
+            await self._process_best_bid_ask(data)
+        else:
+            # Unknown message type
+            logger.debug(f"Unknown event type: {event_type}")
+    
+    async def _process_book_message(self, data: dict):
+        """Process book message (full orderbook)."""
+        asset_id = data.get('asset_id', '')
+        timestamp = int(data.get('timestamp', 0))
         
         market = self.get_current_market()
-        if token_id == market.get('up_token_id'):
+        if asset_id == market.get('up_token_id'):
             side = 'up'
-        elif token_id == market.get('down_token_id'):
+        elif asset_id == market.get('down_token_id'):
             side = 'down'
         else:
             return
@@ -355,7 +372,7 @@ class HybridCollector:
         bid_depth = sum(float(b['size']) * float(b['price']) for b in bids[:5])
         ask_depth = sum(float(a['size']) * float(a['price']) for a in asks[:5])
         
-        market_ts = (int(time.time()) // 300) * 300
+        market_ts = (timestamp // 1000 // 300) * 300
         
         self.buffer_update(PriceUpdate(
             timestamp_ms=timestamp,
@@ -368,7 +385,84 @@ class HybridCollector:
             spread_bps=spread_bps,
             bid_depth=bid_depth,
             ask_depth=ask_depth,
-            source='websocket'
+            source='websocket_book'
+        ))
+    
+    async def _process_price_change(self, data: dict):
+        """Process price change message."""
+        for change in data.get('price_changes', []):
+            asset_id = change.get('asset_id', '')
+            
+            market = self.get_current_market()
+            if asset_id == market.get('up_token_id'):
+                side = 'up'
+            elif asset_id == market.get('down_token_id'):
+                side = 'down'
+            else:
+                continue
+            
+            best_bid = float(change.get('best_bid', 0))
+            best_ask = float(change.get('best_ask', 0))
+            
+            if best_bid == 0 or best_ask == 0:
+                continue
+            
+            mid = (best_bid + best_ask) / 2
+            spread_bps = int((best_ask - best_bid) / mid * 10000)
+            
+            timestamp = int(data.get('timestamp', time.time() * 1000))
+            market_ts = (timestamp // 1000 // 300) * 300
+            
+            self.buffer_update(PriceUpdate(
+                timestamp_ms=timestamp,
+                market_ts=market_ts,
+                asset='BTC',
+                side=side,
+                bid=best_bid,
+                ask=best_ask,
+                mid=mid,
+                spread_bps=spread_bps,
+                bid_depth=0,  # Not provided in price_change
+                ask_depth=0,
+                source='websocket_price'
+            ))
+    
+    async def _process_best_bid_ask(self, data: dict):
+        """Process best bid/ask message."""
+        asset_id = data.get('asset_id', '')
+        
+        market = self.get_current_market()
+        if asset_id == market.get('up_token_id'):
+            side = 'up'
+        elif asset_id == market.get('down_token_id'):
+            side = 'down'
+        else:
+            return
+        
+        best_bid = float(data.get('best_bid', 0))
+        best_ask = float(data.get('best_ask', 0))
+        
+        if best_bid == 0 or best_ask == 0:
+            return
+        
+        mid = (best_bid + best_ask) / 2
+        spread_bps = int((best_ask - best_bid) / mid * 10000)
+        
+        timestamp = int(data.get('timestamp', time.time() * 1000))
+        market_ts = (timestamp // 1000 // 300) * 300
+        
+        self.buffer_update(PriceUpdate(
+            timestamp_ms=timestamp,
+            market_ts=market_ts,
+            asset='BTC',
+            side=side,
+            bid=best_bid,
+            ask=best_ask,
+            mid=mid,
+            spread_bps=spread_bps,
+            bid_depth=0,
+            ask_depth=0,
+            source='websocket_bba'
         ))
     
     def rest_fallback_poller(self, interval_sec: float = 2):
