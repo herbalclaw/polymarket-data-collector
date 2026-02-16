@@ -465,7 +465,7 @@ class HybridCollector:
             source='websocket_bba'
         ))
     
-    def rest_fallback_poller(self, interval_sec: float = 2):
+    def rest_fallback_poller(self, interval_sec: float = 5):
         """REST poller that activates when WebSocket is stale."""
         logger.info(f"REST fallback started ({interval_sec}s interval)")
         
@@ -523,8 +523,8 @@ class HybridCollector:
         
         # Start threads
         threads = [
-            threading.Thread(target=self.db_flusher, args=(5,), daemon=True),
-            threading.Thread(target=self.rest_fallback_poller, args=(2,), daemon=True),
+            threading.Thread(target=self.db_flusher, args=(10,), daemon=True),  # Flush every 10s
+            threading.Thread(target=self.rest_fallback_poller, args=(5,), daemon=True),  # REST every 5s
         ]
         
         for t in threads:
