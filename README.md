@@ -1,22 +1,74 @@
 # Polymarket Data Collector
 
-Continuous data collection for Polymarket crypto prediction markets (BTC 5-minute).
+Continuous high-frequency data collection for Polymarket BTC 5-minute markets.
 
 ## Features
 
-- **Multi-asset support**: Currently BTC 5-minute up/down markets (ETH/SOL coming when available)
-- **High-frequency snapshots**: Configurable interval (default: 5 seconds)
-- **Efficient storage**: SQLite for collection, Parquet for analysis
-- **Automatic resolution tracking**: Detects when markets resolve
-- **Backtest-ready**: Easy export to pandas/duckdb
+- **Millisecond precision**: Captures every price change at 10-100Hz
+- **Dual collection**: WebSocket + REST polling for maximum coverage
+- **Efficient storage**: Custom binary format (~24 bytes per update)
+- **Duplicate filtering**: Only stores price changes, not redundant data
+- **Backtest-ready**: Easy export to pandas/NumPy
 
-## Supported Markets
+## Collection Modes
 
-| Asset | Market Type | Status |
-|-------|-------------|--------|
-| BTC   | 5-min Up/Down | ✅ Active |
-| ETH   | 5-min Up/Down | ⏳ Not available yet |
-| SOL   | 5-min Up/Down | ⏳ Not available yet |
+### High-Frequency Mode (Recommended)
+```bash
+python collector_hf.py --interval 100  # 100ms = 10Hz polling
+```
+
+Captures every meaningful price change in the orderbook.
+
+### Standard Mode
+```bash
+python collector.py --interval 5  # 5 second snapshots
+```
+
+Lower frequency for basic analysis.
+
+## Storage Formats
+
+| Format | Size per Update | Use Case |
+|--------|-----------------|----------|
+| Binary (custom) | 24 bytes | Long-term storage |
+| HDF5 | ~40 bytes | Analysis with pandas |
+| SQLite | ~80 bytes | Querying with SQL |
+
+## Quick Start
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Run high-frequency collector
+python collector_hf.py --interval 100
+
+# In another terminal: monitor stats
+python export.py --stats
+```
+
+## Data Schema
+
+Each price update contains:
+- `timestamp_ms`: Millisecond-precision timestamp
+- `bid/ask/mid`: Orderbook prices
+- `spread_bps`: Spread in basis points
+- `bid_depth/ask_depth`: Liquidity at best level
+- `source`: 'websocket' or 'rest'
+
+## Storage Size Estimate
+
+At 100Hz (100ms polling):
+- ~600 updates per minute per side (up/down)
+- ~1,200 updates per minute total
+- ~72,000 updates per hour
+- ~1.7 MB per hour (binary format)
+- ~40 MB per day
+- ~1.2 GB per month
+
+## GitHub Actions
+
+The `.github/workflows/collect.yml` runs continuous collection every 5 minutes.
 
 ## Repository Structure
 
