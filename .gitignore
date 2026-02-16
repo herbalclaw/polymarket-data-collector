@@ -9,8 +9,8 @@ env/
 ENV/
 
 # Data files (too large for git)
-# Allow the main database file (we want to track this)
-!data/raw/btc_hf_data.db
+# Allow the main database files (12-hour rotation)
+!data/raw/btc_hf_*.db
 
 # But ignore other database files
 *.db-journal

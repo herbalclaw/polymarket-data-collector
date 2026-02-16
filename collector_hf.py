@@ -59,8 +59,13 @@ class HighFrequencyCollector:
     CLOB_API = "https://clob.polymarket.com"
     WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
     
-    def __init__(self, db_path: str = "data/raw/btc_hf_data.db"):
+    def __init__(self, db_path: str = None):
+        # Auto-generate DB path based on 12-hour rotation if not provided
+        if db_path is None:
+            db_path = self._get_db_path()
+        
         self.db_path = db_path
+        self.current_period = self._get_current_period()
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
@@ -89,6 +94,35 @@ class HighFrequencyCollector:
         # Stats
         self.updates_count = 0
         self.duplicates_filtered = 0
+    
+    def _get_current_period(self) -> str:
+        """Get current 12-hour period (AM/PM)."""
+        hour = datetime.now().hour
+        return "AM" if hour < 12 else "PM"
+    
+    def _get_db_path(self) -> str:
+        """Generate DB path with 12-hour rotation."""
+        now = datetime.now()
+        period = "AM" if now.hour < 12 else "PM"
+        return f"data/raw/btc_hf_{now:%Y-%m-%d}_{period}.db"
+    
+    def check_rotation(self) -> bool:
+        """Check if we need to rotate to new DB file (12-hour period changed)."""
+        current = self._get_current_period()
+        if current != self.current_period:
+            logger.info(f"Rotating database: {self.current_period} -> {current}")
+            self.flush_buffer()  # Flush any pending data
+            self.conn.close()
+            self.db_path = self._get_db_path()
+            self.current_period = current
+            Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute("PRAGMA synchronous=NORMAL")
+            self._init_tables()
+            self.last_prices.clear()
+            return True
+        return False
         
     def _init_tables(self):
         """Optimized schema for high-frequency data."""
@@ -351,6 +385,10 @@ class HighFrequencyCollector:
         
         while self.running:
             time.sleep(interval_sec)
+            
+            # Check for 12-hour rotation
+            self.check_rotation()
+            
             self.flush_buffer()
             
             # Log stats
@@ -358,7 +396,8 @@ class HighFrequencyCollector:
                 logger.info(
                     f"Updates: {self.updates_count}, "
                     f"Duplicates filtered: {self.duplicates_filtered}, "
-                    f"Buffer: {len(self.price_buffer)}"
+                    f"Buffer: {len(self.price_buffer)}, "
+                    f"DB: {self.db_path}"
                 )
     
     def run(self, poll_interval_ms: float = 100):
