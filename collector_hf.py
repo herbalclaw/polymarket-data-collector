@@ -445,7 +445,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--interval", type=float, default=100,
                        help="Poll interval in milliseconds (default: 100ms = 10Hz)")
-    parser.add_argument("--db", default="data/raw/btc_hf_data.db")
+    parser.add_argument("--db", default=None,
+                       help="Database path (auto-rotates every 12 hours if not specified)")
     args = parser.parse_args()
     
     collector = HighFrequencyCollector(args.db)
