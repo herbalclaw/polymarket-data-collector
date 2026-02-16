@@ -1,14 +1,22 @@
 # Polymarket Data Collector
 
-Continuous data collection for Polymarket crypto prediction markets (BTC, ETH, SOL 5-minute).
+Continuous data collection for Polymarket crypto prediction markets (BTC 5-minute).
 
 ## Features
 
-- **Multi-asset support**: BTC, ETH, SOL 5-minute up/down markets
+- **Multi-asset support**: Currently BTC 5-minute up/down markets (ETH/SOL coming when available)
 - **High-frequency snapshots**: Configurable interval (default: 5 seconds)
 - **Efficient storage**: SQLite for collection, Parquet for analysis
 - **Automatic resolution tracking**: Detects when markets resolve
 - **Backtest-ready**: Easy export to pandas/duckdb
+
+## Supported Markets
+
+| Asset | Market Type | Status |
+|-------|-------------|--------|
+| BTC   | 5-min Up/Down | ✅ Active |
+| ETH   | 5-min Up/Down | ⏳ Not available yet |
+| SOL   | 5-min Up/Down | ⏳ Not available yet |
 
 ## Repository Structure
 

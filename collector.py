@@ -52,11 +52,11 @@ class PolymarketCollector:
     GAMMA_API = "https://gamma-api.polymarket.com"
     CLOB_API = "https://clob.polymarket.com"
     
-    # Asset configurations
+    # Asset configurations (currently only BTC has 5-min markets)
     ASSETS = {
         'BTC': AssetConfig('BTC', 'btc'),
-        'ETH': AssetConfig('ETH', 'eth'),
-        'SOL': AssetConfig('SOL', 'sol'),
+        # 'ETH': AssetConfig('ETH', 'eth'),  # Uncomment when available
+        # 'SOL': AssetConfig('SOL', 'sol'),  # Uncomment when available
     }
     
     def __init__(self, db_path: str = "data/raw/polymarket_data.db"):
