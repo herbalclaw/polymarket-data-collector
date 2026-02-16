@@ -14,6 +14,7 @@ import json
 import time
 import asyncio
 import sys
+import statistics
 from datetime import datetime
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
@@ -263,21 +264,63 @@ class PaperTrader:
         
         return signals
     
+    def calculate_vwap_price(self, side: str, depth: int = 5) -> float:
+        """
+        Calculate VWAP (Volume Weighted Average Price) from order book.
+        
+        For BUY orders: Use ask side (what you'll pay)
+        For SELL orders: Use bid side (what you'll receive)
+        """
+        if len(self.aggregator.prices) < 2:
+            # Fallback to simple mid price
+            prices = [p.price for p in self.aggregator.prices.values()]
+            return statistics.mean(prices) if prices else 0.0
+        
+        # Get aggregated order book across exchanges
+        total_volume = 0.0
+        total_value = 0.0
+        
+        for exchange, price_data in self.aggregator.prices.items():
+            if side == 'up':  # Buying UP = paying ask
+                # Estimate fill price based on depth
+                # In reality, we'd need full order book, using ask as proxy
+                volume = price_data.ask_depth / depth  # Estimated fillable volume
+                price = price_data.ask
+            else:  # Selling/DOWN = receiving bid
+                volume = price_data.bid_depth / depth
+                price = price_data.bid
+            
+            if volume > 0:
+                total_volume += volume
+                total_value += volume * price
+        
+        if total_volume > 0:
+            vwap = total_value / total_volume
+            return vwap
+        else:
+            # Fallback to mid price
+            prices = [p.price for p in self.aggregator.prices.values()]
+            return statistics.mean(prices) if prices else 0.0
+    
     def execute_paper_trade(self, signal: Dict, current_price: float):
-        """Execute a paper trade based on signal."""
+        """Execute a paper trade using VWAP for entry price."""
         # Close existing trade if opposite signal
         if self.active_trade:
             if self.active_trade.side != signal['signal']:
-                self.close_trade(current_price, "Signal reversal")
+                exit_vwap = self.calculate_vwap_price('down' if self.active_trade.side == 'up' else 'up')
+                self.close_trade(exit_vwap, "Signal reversal")
             else:
                 return  # Same direction, hold
         
-        # Open new trade
+        # Calculate VWAP entry price
+        entry_vwap = self.calculate_vwap_price(signal['signal'])
+        
+        # Open new trade with VWAP price
         trade = Trade(
             timestamp=time.time(),
             strategy=signal['strategy'],
             side=signal['signal'],
-            entry_price=current_price,
+            entry_price=entry_vwap,
             confidence=signal['confidence'],
             reason=signal['reason']
         )
@@ -288,12 +331,13 @@ class PaperTrader:
         print(f"\n📈 PAPER TRADE OPENED", flush=True)
         print(f"   Strategy: {signal['strategy']}", flush=True)
         print(f"   Side: {signal['signal'].upper()}", flush=True)
-        print(f"   Entry: ${current_price:,.2f}", flush=True)
+        print(f"   Entry VWAP: ${entry_vwap:,.2f}", flush=True)
+        print(f"   (vs Mid: ${current_price:,.2f})", flush=True)
         print(f"   Confidence: {signal['confidence']:.1%}", flush=True)
         print(f"   Reason: {signal['reason']}", flush=True)
     
     def close_trade(self, exit_price: float, reason: str):
-        """Close the active paper trade."""
+        """Close the active paper trade using VWAP exit price."""
         if not self.active_trade:
             return
         
@@ -302,7 +346,7 @@ class PaperTrader:
         trade.exit_time = time.time()
         trade.status = "closed"
         
-        # Calculate P&L (simplified - assumes $1 per trade)
+        # Calculate P&L based on VWAP prices
         if trade.side == "up":
             trade.pnl = (exit_price - trade.entry_price) / trade.entry_price * 100
         else:
@@ -322,6 +366,8 @@ class PaperTrader:
         
         print(f"\n📉 PAPER TRADE CLOSED", flush=True)
         print(f"   Strategy: {trade.strategy}", flush=True)
+        print(f"   Entry VWAP: ${trade.entry_price:,.2f}", flush=True)
+        print(f"   Exit VWAP: ${exit_price:,.2f}", flush=True)
         print(f"   P&L: {trade.pnl:+.3f}%", flush=True)
         print(f"   Reason: {reason}", flush=True)
         
@@ -407,7 +453,8 @@ class PaperTrader:
                 if self.active_trade:
                     window_start = (int(time.time()) // 300) * 300
                     if window_start != self.current_window_start:
-                        self.close_trade(current_price, "Window close")
+                        exit_vwap = self.calculate_vwap_price('down' if self.active_trade.side == 'up' else 'up')
+                        self.close_trade(exit_vwap, "Window close")
                         self.current_window_start = window_start
                 
                 # Print performance every 10 cycles
