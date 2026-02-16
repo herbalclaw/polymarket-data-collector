@@ -9,10 +9,13 @@ env/
 ENV/
 
 # Data files (too large for git)
-data/raw/*.db
-data/raw/*.db-journal
-data/raw/*.db-wal
-data/raw/*.db-shm
+# Allow the main database file (we want to track this)
+!data/raw/btc_hf_data.db
+
+# But ignore other database files
+*.db-journal
+*.db-wal
+*.db-shm
 *.log
 
 # But keep parquet files (compressed)
