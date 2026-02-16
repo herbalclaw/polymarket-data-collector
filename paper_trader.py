@@ -97,8 +97,7 @@ class PaperTrader:
             return None
         
         # Calculate VWAP trend
-        recent_vwaps = [p['metrics']['price_stats']['vwap'] 
-                       for p in list(self.price_history)[-10:]]
+        recent_vwaps = [p.get('vwap', 0) for p in list(self.price_history)[-10:]]
         
         if len(recent_vwaps) < 5:
             return None
