@@ -19,6 +19,7 @@ from typing import List, Dict, Optional
 from collections import deque
 
 from price_aggregator import MultiExchangeAggregator, PriceData
+from sentiment_analyzer import NewsSentimentAnalyzer
 
 
 @dataclass
@@ -77,7 +78,11 @@ class PaperTrader:
             "arbitrage": StrategyPerformance("Arbitrage Detection"),
             "vwap": StrategyPerformance("VWAP Deviation"),
             "leadlag": StrategyPerformance("Cross-Exchange Lead/Lag"),
+            "sentiment": StrategyPerformance("News Sentiment"),
         }
+        
+        # Sentiment analyzer
+        self.sentiment_analyzer = NewsSentimentAnalyzer()
         
         # Market state
         self.current_window_start = 0
@@ -247,6 +252,11 @@ class PaperTrader:
         if leadlag_signal:
             signals.append({"strategy": "leadlag", **leadlag_signal})
         
+        # Strategy 5: Sentiment
+        sentiment_signal = self.sentiment_analyzer.generate_trading_signal()
+        if sentiment_signal:
+            signals.append(sentiment_signal)
+        
         return signals
     
     def execute_paper_trade(self, signal: Dict, current_price: float):
@@ -352,6 +362,9 @@ class PaperTrader:
             # Fetch prices
             await self.aggregator.fetch_all_prices()
             
+            # Fetch sentiment
+            sentiment_data = await self.sentiment_analyzer.analyze_sentiment()
+            
             if len(self.aggregator.prices) >= 2:
                 metrics = self.aggregator.calculate_aggregated_metrics()
                 
@@ -366,6 +379,11 @@ class PaperTrader:
                 
                 print(f"\nAggregated BTC Price: ${current_price:,.2f}")
                 print(f"Spread: {metrics['spread_stats']['effective_spread']:.2f} bps")
+                print(f"Exchanges: {len(self.aggregator.prices)}")
+                
+                # Show sentiment
+                print(f"\n📰 Sentiment: {sentiment_data['overall'].upper()} ({sentiment_data['confidence']:.1%})")
+                print(f"   Bullish: {sentiment_data['bullish_count']}, Bearish: {sentiment_data['bearish_count']}")
                 
                 # Evaluate strategies
                 signals = self.evaluate_strategies()

@@ -153,6 +153,94 @@ class MultiExchangeAggregator:
             print(f"Bybit error: {e}")
             return None
     
+    async def fetch_okx(self, session: aiohttp.ClientSession) -> Optional[PriceData]:
+        """Fetch from OKX."""
+        start = time.time()
+        try:
+            async with session.get(
+                'https://www.okx.com/api/v5/market/ticker',
+                params={'instId': 'BTC-USDT'},
+                timeout=aiohttp.ClientTimeout(total=2)
+            ) as resp:
+                data = await resp.json()
+                latency = (time.time() - start) * 1000
+                
+                ticker = data['data'][0]
+                bid = float(ticker['bidPx'])
+                ask = float(ticker['askPx'])
+                
+                return PriceData(
+                    exchange='OKX',
+                    price=(bid + ask) / 2,
+                    bid=bid,
+                    ask=ask,
+                    spread=(ask - bid) / ((bid + ask) / 2) * 10000,
+                    volume_24h=float(ticker['vol24h']),
+                    timestamp=time.time(),
+                    latency_ms=latency
+                )
+        except Exception as e:
+            print(f"OKX error: {e}")
+            return None
+    
+    async def fetch_bitfinex(self, session: aiohttp.ClientSession) -> Optional[PriceData]:
+        """Fetch from Bitfinex."""
+        start = time.time()
+        try:
+            async with session.get(
+                'https://api-pub.bitfinex.com/v2/ticker/tBTCUSD',
+                timeout=aiohttp.ClientTimeout(total=2)
+            ) as resp:
+                data = await resp.json()
+                latency = (time.time() - start) * 1000
+                
+                bid = float(data[0])
+                ask = float(data[2])
+                
+                return PriceData(
+                    exchange='Bitfinex',
+                    price=(bid + ask) / 2,
+                    bid=bid,
+                    ask=ask,
+                    spread=(ask - bid) / ((bid + ask) / 2) * 10000,
+                    volume_24h=float(data[6]),
+                    timestamp=time.time(),
+                    latency_ms=latency
+                )
+        except Exception as e:
+            print(f"Bitfinex error: {e}")
+            return None
+    
+    async def fetch_htx(self, session: aiohttp.ClientSession) -> Optional[PriceData]:
+        """Fetch from HTX (Huobi)."""
+        start = time.time()
+        try:
+            async with session.get(
+                'https://api.huobi.pro/market/detail/merged',
+                params={'symbol': 'btcusdt'},
+                timeout=aiohttp.ClientTimeout(total=2)
+            ) as resp:
+                data = await resp.json()
+                latency = (time.time() - start) * 1000
+                
+                tick = data['tick']
+                bid = float(tick['bid'][0])
+                ask = float(tick['ask'][0])
+                
+                return PriceData(
+                    exchange='HTX',
+                    price=(bid + ask) / 2,
+                    bid=bid,
+                    ask=ask,
+                    spread=(ask - bid) / ((bid + ask) / 2) * 10000,
+                    volume_24h=float(tick['vol']),
+                    timestamp=time.time(),
+                    latency_ms=latency
+                )
+        except Exception as e:
+            print(f"HTX error: {e}")
+            return None
+    
     async def fetch_all_prices(self) -> Dict[str, PriceData]:
         """Fetch prices from all exchanges concurrently."""
         async with aiohttp.ClientSession() as session:
@@ -161,6 +249,9 @@ class MultiExchangeAggregator:
                 self.fetch_coinbase(session),
                 self.fetch_kraken(session),
                 self.fetch_bybit(session),
+                self.fetch_okx(session),
+                self.fetch_bitfinex(session),
+                self.fetch_htx(session),
             ]
             
             results = await asyncio.gather(*tasks, return_exceptions=True)
