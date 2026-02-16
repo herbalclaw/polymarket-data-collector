@@ -1,0 +1,55 @@
+name: Data Collection
+
+on:
+  schedule:
+    # Run every 5 minutes during market hours
+    # Adjust as needed - Polymarket crypto markets run 24/7
+    - cron: '*/5 * * * *'
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+    
+    - name: Install dependencies
+      run: |
+        pip install -r requirements.txt
+    
+    - name: Run collector (5 minutes)
+      run: |
+        python collector.py --interval 5 &
+        COLLECTOR_PID=$!
+        sleep 300  # Run for 5 minutes
+        kill $COLLECTOR_PID || true
+    
+    - name: Export to Parquet
+      run: |
+        python export.py --stats
+        python export.py --resolutions
+    
+    - name: Commit data updates
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add data/parquet/
+        git diff --quiet && git diff --staged --quiet || git commit -m "Update data: $(date -u +%Y-%m-%d-%H:%M)"
+    
+    - name: Push changes
+      uses: ad-m/github-push-action@master
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        branch: ${{ github.ref }}

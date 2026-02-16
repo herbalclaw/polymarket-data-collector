@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Data files (too large for git)
+data/raw/*.db
+data/raw/*.db-journal
+data/raw/*.db-wal
+data/raw/*.db-shm
+*.log
+
+# But keep parquet files (compressed)
+# data/parquet/*.parquet  # Uncomment if you want to gitignore parquet too
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
