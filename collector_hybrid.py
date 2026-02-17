@@ -130,47 +130,84 @@ class HybridCollector:
         self.conn.commit()
     
     def get_current_market(self) -> Optional[dict]:
-        if self.current_market and time.time() - self.market_refresh_time < 60:
+        """Fetch the ACTIVE BTC 5-min market - rotates to next window when current closes."""
+        # Check cache first (short TTL for active rotation)
+        if self.current_market and time.time() - self.market_refresh_time < 10:
             return self.current_market
         
         try:
-            current_window = (int(time.time()) // 300) * 300
-            slug = f"btc-updown-5m-{current_window}"
+            now = int(time.time())
             
-            resp = self.session.get(
-                f"{self.GAMMA_API}/events",
-                params={"slug": slug},
-                timeout=10
-            )
-            resp.raise_for_status()
-            data = resp.json()
+            # Try current and next few windows to find active market
+            for window_offset in range(0, 3):
+                window = ((now // 300) * 300) + (window_offset * 300)
+                slug = f"btc-updown-5m-{window}"
+                
+                resp = self.session.get(
+                    f"{self.GAMMA_API}/events",
+                    params={"slug": slug},
+                    timeout=10
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                
+                if not data or not data[0].get('markets'):
+                    continue
+                
+                event = data[0]
+                market = event['markets'][0]
+                
+                # Check if market is active (not closed, accepting orders)
+                is_closed = market.get('closed', False)
+                accepting = market.get('acceptingOrders', False)
+                end_date = market.get('endDate', '')
+                
+                # Skip if market is closed or expired
+                if is_closed:
+                    continue
+                
+                # Check if expired by end_date
+                if end_date:
+                    from datetime import datetime
+                    try:
+                        expiry = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+                        if expiry.timestamp() < now:
+                            continue  # Market expired
+                    except:
+                        pass
+                
+                # Found active market
+                token_ids = json.loads(market.get('clobTokenIds', '[]'))
+                
+                self.current_market = {
+                    'timestamp': window,
+                    'asset': 'BTC',
+                    'slug': slug,
+                    'up_token_id': token_ids[0] if len(token_ids) > 0 else None,
+                    'down_token_id': token_ids[1] if len(token_ids) > 1 else None
+                }
+                self.market_refresh_time = time.time()
+                
+                # Log market rotation
+                if window != getattr(self, '_last_logged_window', None):
+                    logger.info(f"📊 Active market: {slug} (accepting={accepting}, closed={is_closed})")
+                    self._last_logged_window = window
+                
+                self.conn.execute('''
+                    INSERT OR IGNORE INTO markets 
+                    (timestamp, asset, slug, created_at, up_token_id, down_token_id)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (window, 'BTC', slug, int(time.time()),
+                      token_ids[0] if len(token_ids) > 0 else None,
+                      token_ids[1] if len(token_ids) > 1 else None))
+                self.conn.commit()
+                
+                return self.current_market
             
-            if not data or not data[0].get('markets'):
-                return None
+            # No active market found
+            logger.warning("No active BTC 5-min market found")
+            return None
             
-            event = data[0]
-            market = event['markets'][0]
-            token_ids = json.loads(market.get('clobTokenIds', '[]'))
-            
-            self.current_market = {
-                'timestamp': current_window,
-                'asset': 'BTC',
-                'slug': slug,
-                'up_token_id': token_ids[0] if len(token_ids) > 0 else None,
-                'down_token_id': token_ids[1] if len(token_ids) > 1 else None
-            }
-            self.market_refresh_time = time.time()
-            
-            self.conn.execute('''
-                INSERT OR IGNORE INTO markets 
-                (timestamp, asset, slug, created_at, up_token_id, down_token_id)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (current_window, 'BTC', slug, int(time.time()),
-                  token_ids[0] if len(token_ids) > 0 else None,
-                  token_ids[1] if len(token_ids) > 1 else None))
-            self.conn.commit()
-            
-            return self.current_market
         except Exception as e:
             logger.warning(f"Error fetching market: {e}")
             return self.current_market
