@@ -513,9 +513,11 @@ class HybridCollector:
             source='websocket_bba'
         ))
     
-    def rest_fallback_poller(self, interval_sec: float = 5):
+    def rest_fallback_poller(self, interval_sec: float = 0.5):
         """REST poller that activates when WebSocket is stale."""
         logger.info(f"REST fallback started ({interval_sec}s interval)")
+        
+        warned_stale = False  # Track if we've logged the stale warning
         
         while self.running:
             time.sleep(interval_sec)
@@ -524,10 +526,13 @@ class HybridCollector:
             ws_stale = time.time() - self.last_ws_message > 5
             
             if self.ws_connected and not ws_stale:
+                warned_stale = False  # Reset warning flag when WS is healthy
                 continue  # WebSocket is healthy
             
-            if ws_stale and self.ws_connected:
-                logger.warning("WebSocket stale, using REST fallback...")
+            # Only log once when switching to fallback
+            if ws_stale and self.ws_connected and not warned_stale:
+                logger.warning("WebSocket stale, switching to REST fallback...")
+                warned_stale = True
             
             # Fetch via REST
             market = self.get_current_market()
