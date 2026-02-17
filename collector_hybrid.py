@@ -179,12 +179,19 @@ class HybridCollector:
                 # Found active market
                 token_ids = json.loads(market.get('clobTokenIds', '[]'))
                 
+                # Get real prices from Gamma API (not CLOB order book which returns fake 0.01/0.99)
+                outcome_prices = json.loads(market.get('outcomePrices', '[0.5, 0.5]'))
+                best_bid = market.get('bestBid', outcome_prices[0] if outcome_prices else 0.5)
+                best_ask = market.get('bestAsk', outcome_prices[1] if len(outcome_prices) > 1 else 0.5)
+                
                 self.current_market = {
                     'timestamp': window,
                     'asset': 'BTC',
                     'slug': slug,
                     'up_token_id': token_ids[0] if len(token_ids) > 0 else None,
-                    'down_token_id': token_ids[1] if len(token_ids) > 1 else None
+                    'down_token_id': token_ids[1] if len(token_ids) > 1 else None,
+                    'best_bid': float(best_bid) if best_bid else 0.5,
+                    'best_ask': float(best_ask) if best_ask else 0.5,
                 }
                 self.market_refresh_time = time.time()
                 
@@ -271,29 +278,24 @@ class HybridCollector:
             logger.error(f"Error flushing: {e}")
     
     def fetch_rest_snapshot(self, token_id: str, side: str) -> Optional[PriceUpdate]:
-        """Fetch via REST as fallback."""
+        """Fetch via REST using Gamma API prices (CLOB returns fake 0.01/0.99)."""
         try:
-            resp = self.session.get(
-                f"{self.REST_API}/book",
-                params={"token_id": token_id},
-                timeout=5
-            )
-            resp.raise_for_status()
-            book = resp.json()
-            
-            bids = book.get('bids', [])
-            asks = book.get('asks', [])
-            
-            if not bids or not asks:
+            # Use cached market data with real prices from Gamma API
+            market = self.get_current_market()
+            if not market:
                 return None
             
-            best_bid = float(bids[0]['price'])
-            best_ask = float(asks[0]['price'])
+            # Get prices from Gamma API (already cached in market dict)
+            best_bid = market.get('best_bid', 0.5)
+            best_ask = market.get('best_ask', 0.5)
+            
+            # Validate prices are realistic
+            if best_bid < 0.01 or best_ask > 0.99 or best_bid >= best_ask:
+                logger.warning(f"Invalid prices from Gamma API: bid={best_bid}, ask={best_ask}")
+                return None
+            
             mid = (best_bid + best_ask) / 2
             spread_bps = int((best_ask - best_bid) / mid * 10000)
-            
-            bid_depth = sum(float(b['size']) * float(b['price']) for b in bids[:5])
-            ask_depth = sum(float(a['size']) * float(a['price']) for a in asks[:5])
             
             market_ts = (int(time.time()) // 300) * 300
             
@@ -306,9 +308,9 @@ class HybridCollector:
                 ask=best_ask,
                 mid=mid,
                 spread_bps=spread_bps,
-                bid_depth=bid_depth,
-                ask_depth=ask_depth,
-                source='rest_fallback'
+                bid_depth=0,  # Not available from Gamma API
+                ask_depth=0,
+                source='gamma_api'
             )
         except Exception as e:
             logger.warning(f"REST fetch error: {e}")
