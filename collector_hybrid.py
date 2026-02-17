@@ -179,13 +179,24 @@ class HybridCollector:
         return int(price * 1_000_000)
     
     def _is_duplicate(self, update: PriceUpdate) -> bool:
+        """Check if update is duplicate - allow updates every 100ms even if price same."""
         key = f"{update.market_ts}_{update.side}"
         last = self.last_prices.get(key)
         
-        if last and last['bid'] == update.bid and last['ask'] == update.ask:
+        if last:
+            # Always allow update if price changed
+            if last['bid'] != update.bid or last['ask'] != update.ask:
+                return False
+            # Allow update if 100ms passed since last (for high-frequency capture)
+            if update.timestamp_ms - last['timestamp_ms'] > 100:
+                return False
             return True
         
-        self.last_prices[key] = {'bid': update.bid, 'ask': update.ask}
+        self.last_prices[key] = {
+            'bid': update.bid, 
+            'ask': update.ask,
+            'timestamp_ms': update.timestamp_ms
+        }
         return False
     
     def buffer_update(self, update: PriceUpdate):
@@ -523,8 +534,8 @@ class HybridCollector:
         
         # Start threads
         threads = [
-            threading.Thread(target=self.db_flusher, args=(10,), daemon=True),  # Flush every 10s
-            threading.Thread(target=self.rest_fallback_poller, args=(5,), daemon=True),  # REST every 5s
+            threading.Thread(target=self.db_flusher, args=(1,), daemon=True),  # Flush every 1s
+            threading.Thread(target=self.rest_fallback_poller, args=(0.5,), daemon=True),  # REST every 500ms
         ]
         
         for t in threads:
