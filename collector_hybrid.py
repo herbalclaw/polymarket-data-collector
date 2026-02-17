@@ -48,6 +48,8 @@ class PriceUpdate:
     bid_depth: float
     ask_depth: float
     source: str
+    chainlink_btc_price: float = 0.0  # BTC price from Chainlink
+    binance_btc_price: float = 0.0    # BTC price from Binance
 
 
 class HybridCollector:
@@ -85,6 +87,62 @@ class HybridCollector:
         self.duplicates_filtered = 0
         self.last_prices: Dict[str, dict] = {}
         
+        # BTC price cache
+        self.last_btc_prices = {'chainlink': 0.0, 'binance': 0.0}
+        self.last_btc_fetch_time = 0
+    
+    def fetch_btc_prices(self) -> tuple:
+        """Fetch BTC prices from Chainlink and Binance."""
+        try:
+            # Cache for 5 seconds to avoid rate limits
+            if time.time() - self.last_btc_fetch_time < 5:
+                return self.last_btc_prices['chainlink'], self.last_btc_prices['binance']
+            
+            chainlink_price = 0.0
+            binance_price = 0.0
+            
+            # Fetch from Binance (primary)
+            try:
+                resp = self.session.get(
+                    'https://api.binance.com/api/v3/ticker/price',
+                    params={'symbol': 'BTCUSDT'},
+                    timeout=3
+                )
+                if resp.status_code == 200:
+                    binance_price = float(resp.json().get('price', 0))
+            except Exception as e:
+                logger.debug(f"Binance fetch error: {e}")
+            
+            # Fetch from Chainlink (Ethereum mainnet)
+            # Using Chainlink's public ETH feed API
+            try:
+                resp = self.session.get(
+                    'https://api.chainlink.io/v1/price?feed=BTC-USD',
+                    timeout=3
+                )
+                if resp.status_code == 200:
+                    chainlink_price = float(resp.json().get('price', 0))
+            except Exception as e:
+                logger.debug(f"Chainlink fetch error: {e}")
+            
+            # Fallback: use same price if one fails
+            if chainlink_price == 0 and binance_price > 0:
+                chainlink_price = binance_price
+            if binance_price == 0 and chainlink_price > 0:
+                binance_price = chainlink_price
+            
+            self.last_btc_prices = {
+                'chainlink': chainlink_price,
+                'binance': binance_price
+            }
+            self.last_btc_fetch_time = time.time()
+            
+            return chainlink_price, binance_price
+            
+        except Exception as e:
+            logger.warning(f"BTC price fetch error: {e}")
+            return self.last_btc_prices['chainlink'], self.last_btc_prices['binance']
+        
         # Market info
         self.current_market = None
         self.market_refresh_time = 0
@@ -121,7 +179,9 @@ class HybridCollector:
                 spread_bps INTEGER,
                 bid_depth REAL,
                 ask_depth REAL,
-                source TEXT
+                source TEXT,
+                chainlink_btc_price REAL,  -- BTC price from Chainlink oracle
+                binance_btc_price REAL     -- BTC price from Binance exchange
             );
             
             CREATE INDEX IF NOT EXISTS idx_price_time ON price_updates(timestamp_ms);
@@ -260,20 +320,24 @@ class HybridCollector:
             updates = list(self.price_buffer)
             self.price_buffer.clear()
         
+        # Fetch BTC prices once per flush
+        chainlink_btc, binance_btc = self.fetch_btc_prices()
+        
         try:
             self.conn.executemany('''
                 INSERT INTO price_updates 
                 (timestamp_ms, market_ts, asset, side, bid, ask, mid, 
-                 spread_bps, bid_depth, ask_depth, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 spread_bps, bid_depth, ask_depth, source, chainlink_btc_price, binance_btc_price)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', [
                 (u.timestamp_ms, u.market_ts, u.asset, u.side,
                  self._scale(u.bid), self._scale(u.ask), self._scale(u.mid),
-                 u.spread_bps, u.bid_depth, u.ask_depth, u.source)
+                 u.spread_bps, u.bid_depth, u.ask_depth, u.source,
+                 chainlink_btc, binance_btc)
                 for u in updates
             ])
             self.conn.commit()
-            logger.debug(f"Flushed {len(updates)} updates")
+            logger.debug(f"Flushed {len(updates)} updates with BTC prices: Chainlink={chainlink_btc:.2f}, Binance={binance_btc:.2f}")
         except Exception as e:
             logger.error(f"Error flushing: {e}")
     
@@ -299,6 +363,9 @@ class HybridCollector:
             
             market_ts = (int(time.time()) // 300) * 300
             
+            # Fetch BTC prices
+            chainlink_btc, binance_btc = self.fetch_btc_prices()
+            
             return PriceUpdate(
                 timestamp_ms=int(time.time() * 1000),
                 market_ts=market_ts,
@@ -310,7 +377,9 @@ class HybridCollector:
                 spread_bps=spread_bps,
                 bid_depth=0,  # Not available from Gamma API
                 ask_depth=0,
-                source='gamma_api'
+                source='gamma_api',
+                chainlink_btc_price=chainlink_btc,
+                binance_btc_price=binance_btc
             )
         except Exception as e:
             logger.warning(f"REST fetch error: {e}")
