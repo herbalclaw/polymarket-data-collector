@@ -9,13 +9,15 @@ env/
 ENV/
 
 # Data files (too large for git)
-# Allow the main database files (12-hour rotation)
-!data/raw/btc_hf_*.db
-
-# But ignore other database files
+# Database files are too large for git - use external storage
+*.db
 *.db-journal
 *.db-wal
 *.db-shm
+*.xlsx
+*.parquet
+data/raw/
+data/parquet/
 *.log
 
 # But keep parquet files (compressed)
