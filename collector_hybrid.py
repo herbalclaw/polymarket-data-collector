@@ -90,6 +90,10 @@ class HybridCollector:
         # BTC price cache
         self.last_btc_prices = {'chainlink': 0.0, 'binance': 0.0}
         self.last_btc_fetch_time = 0
+        
+        # Market info
+        self.current_market = None
+        self.market_refresh_time = 0
     
     def fetch_btc_prices(self) -> tuple:
         """Fetch BTC prices from Chainlink and Binance."""
@@ -142,10 +146,6 @@ class HybridCollector:
         except Exception as e:
             logger.warning(f"BTC price fetch error: {e}")
             return self.last_btc_prices['chainlink'], self.last_btc_prices['binance']
-        
-        # Market info
-        self.current_market = None
-        self.market_refresh_time = 0
     
     def _get_current_period(self) -> str:
         hour = datetime.now().hour
