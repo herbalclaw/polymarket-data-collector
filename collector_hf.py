@@ -4,6 +4,8 @@ High-Frequency Polymarket BTC 5-Min Data Collector
 
 Captures orderbook changes at millisecond granularity using WebSocket
 with REST fallback for maximum data fidelity.
+
+PREVENTS: Attribute errors, missing initialization, wrong data types
 """
 
 import os
@@ -94,6 +96,14 @@ class HighFrequencyCollector:
         # Stats
         self.updates_count = 0
         self.duplicates_filtered = 0
+        
+        # CRITICAL: Market info - must be initialized here
+        self.current_market: Optional[dict] = None
+        self.market_refresh_time: float = 0
+        
+        # CRITICAL: BTC price cache - must be initialized here
+        self.last_btc_prices = {'chainlink': 0.0, 'binance': 0.0}
+        self.last_btc_fetch_time: float = 0
     
     def _get_current_hour(self) -> str:
         """Get current hour for hourly rotation."""
@@ -119,6 +129,9 @@ class HighFrequencyCollector:
             self.conn.execute("PRAGMA synchronous=NORMAL")
             self._init_tables()
             self.last_prices.clear()
+            # CRITICAL: Reset market cache on rotation
+            self.current_market = None
+            self.market_refresh_time = 0
             return True
         return False
         
@@ -171,23 +184,30 @@ class HighFrequencyCollector:
         return price / 1_000_000
     
     def get_current_market(self) -> Optional[dict]:
-        """Get current BTC 5-min market."""
+        """Get current BTC 5-min market with caching."""
         now = int(time.time())
         current_window = (now // 300) * 300
         
-        # Check cache
+        # CRITICAL: Check cache first (with 10-second TTL for active rotation)
+        if self.current_market and self.current_market.get('timestamp') == current_window:
+            if time.time() - self.market_refresh_time < 10:
+                return self.current_market
+        
+        # Check database cache
         cursor = self.conn.execute(
             "SELECT * FROM markets WHERE timestamp = ?",
             (current_window,)
         )
         row = cursor.fetchone()
         if row:
-            return {
+            self.current_market = {
                 'timestamp': row[0],
                 'asset': row[1],
                 'up_token_id': row[6],
                 'down_token_id': row[7]
             }
+            self.market_refresh_time = time.time()
+            return self.current_market
         
         # Fetch from API
         slug = f"btc-updown-5m-{current_window}"
@@ -217,15 +237,17 @@ class HighFrequencyCollector:
             ''', (current_window, 'BTC', slug, int(time.time()), up_token, down_token))
             self.conn.commit()
             
-            return {
+            self.current_market = {
                 'timestamp': current_window,
                 'asset': 'BTC',
                 'up_token_id': up_token,
                 'down_token_id': down_token
             }
+            self.market_refresh_time = time.time()
+            return self.current_market
         except Exception as e:
             logger.warning(f"Error fetching market: {e}")
-            return None
+            return self.current_market  # Return cached even if stale
     
     def fetch_rest_snapshot(self, token_id: str, side: str) -> Optional[PriceUpdate]:
         """Fetch current orderbook via REST - using Gamma API for real prices."""
@@ -247,7 +269,7 @@ class HighFrequencyCollector:
             
             if not data or not data[0].get('markets'):
                 return None
-            
+
             market_data = data[0]['markets'][0]
             best_bid = float(market_data.get('bestBid', 0))
             best_ask = float(market_data.get('bestAsk', 0))
@@ -414,6 +436,9 @@ class HighFrequencyCollector:
             # Force get_current_market to fetch new tokens
             self.conn.execute("DELETE FROM markets WHERE timestamp < ?", (current_window - 600,))
             self.conn.commit()
+            # CRITICAL: Clear market cache
+            self.current_market = None
+            self.market_refresh_time = 0
     
     def db_flusher(self, interval_sec: float = 5):
         """Periodically flush buffer to database."""
@@ -460,28 +485,25 @@ class HighFrequencyCollector:
         )
         flush_thread.start()
         
+        # Keep main thread alive
         try:
             while self.running:
                 time.sleep(1)
         except KeyboardInterrupt:
-            logger.info("\nStopping collector...")
+            logger.info("Shutting down...")
             self.running = False
-        
-        # Final flush
-        self.flush_buffer()
-        self.conn.close()
-        logger.info("Collector stopped.")
+            poll_thread.join(timeout=5)
+            flush_thread.join(timeout=5)
+            self.flush_buffer()  # Final flush
+            self.conn.close()
 
 
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--interval", type=float, default=1000,
-                       help="Poll interval in milliseconds (default: 1000ms = 1Hz)")
-    parser.add_argument("--db", default=None,
-                       help="Database path (auto-rotates every 12 hours if not specified)")
+    parser = argparse.ArgumentParser(description="HF Polymarket Data Collector")
+    parser.add_argument("--interval", type=float, default=100, help="Poll interval in ms")
     args = parser.parse_args()
     
-    collector = HighFrequencyCollector(args.db)
+    collector = HighFrequencyCollector()
     collector.run(poll_interval_ms=args.interval)
