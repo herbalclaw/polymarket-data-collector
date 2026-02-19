@@ -230,29 +230,36 @@ class HighFrequencyCollector:
             return None
     
     def fetch_rest_snapshot(self, token_id: str, side: str) -> Optional[PriceUpdate]:
-        """Fetch current orderbook via REST."""
+        """Fetch current orderbook via REST - using Gamma API for real prices."""
         try:
-            resp = self.session.get(
-                f"{self.CLOB_API}/book",
-                params={"token_id": token_id},
-                timeout=5  # Increased from 2s
-            )
-            resp.raise_for_status()
-            book = resp.json()
-            
-            bids = book.get('bids', [])
-            asks = book.get('asks', [])
-            
-            if not bids or not asks:
-                return None
-            
-            best_bid = float(bids[0]['price'])
-            best_ask = float(asks[0]['price'])
-            mid = (best_bid + best_ask) / 2
-            
+            # Get current market info from Gamma API (has real prices for restricted markets)
             market = self.get_current_market()
             if not market:
                 return None
+            
+            # Fetch from Gamma API to get real prices
+            slug = f"btc-updown-5m-{market['timestamp']}"
+            resp = self.session.get(
+                f"{self.GAMMA_API}/events",
+                params={"slug": slug},
+                timeout=5
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            
+            if not data or not data[0].get('markets'):
+                return None
+            
+            market_data = data[0]['markets'][0]
+            best_bid = float(market_data.get('bestBid', 0))
+            best_ask = float(market_data.get('bestAsk', 0))
+            
+            # Validate prices are realistic
+            if best_bid < 0.01 or best_ask > 0.99 or best_bid >= best_ask:
+                logger.debug(f"Invalid prices from Gamma: {best_bid}/{best_ask}")
+                return None
+            
+            mid = (best_bid + best_ask) / 2
             
             return PriceUpdate(
                 timestamp_ms=int(time.time() * 1000),
@@ -263,9 +270,9 @@ class HighFrequencyCollector:
                 ask=best_ask,
                 mid=mid,
                 spread_bps=int((best_ask - best_bid) * 10000),
-                bid_depth=float(bids[0]['price']) * float(bids[0]['size']),
-                ask_depth=float(asks[0]['price']) * float(asks[0]['size']),
-                source='rest'
+                bid_depth=0,
+                ask_depth=0,
+                source='gamma'
             )
         except Exception as e:
             logger.debug(f"REST fetch error: {e}")
