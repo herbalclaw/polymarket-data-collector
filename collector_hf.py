@@ -60,12 +60,12 @@ class HighFrequencyCollector:
     WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
     
     def __init__(self, db_path: str = None):
-        # Auto-generate DB path based on 12-hour rotation if not provided
+        # Auto-generate DB path based on hourly rotation if not provided
         if db_path is None:
             db_path = self._get_db_path()
         
         self.db_path = db_path
-        self.current_period = self._get_current_period()
+        self.current_period = self._get_current_hour()
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
@@ -95,20 +95,18 @@ class HighFrequencyCollector:
         self.updates_count = 0
         self.duplicates_filtered = 0
     
-    def _get_current_period(self) -> str:
-        """Get current 12-hour period (AM/PM)."""
-        hour = datetime.now().hour
-        return "AM" if hour < 12 else "PM"
+    def _get_current_hour(self) -> str:
+        """Get current hour for hourly rotation."""
+        return datetime.now().strftime("%H00")
     
     def _get_db_path(self) -> str:
-        """Generate DB path with 12-hour rotation."""
+        """Generate DB path with hourly rotation."""
         now = datetime.now()
-        period = "AM" if now.hour < 12 else "PM"
-        return f"data/raw/btc_hf_{now:%Y-%m-%d}_{period}.db"
+        return f"data/raw/btc_hf_{now:%Y-%m-%d}_{self._get_current_hour()}.db"
     
     def check_rotation(self) -> bool:
-        """Check if we need to rotate to new DB file (12-hour period changed)."""
-        current = self._get_current_period()
+        """Check if we need to rotate to new DB file (hour changed)."""
+        current = self._get_current_hour()
         if current != self.current_period:
             logger.info(f"Rotating database: {self.current_period} -> {current}")
             self.flush_buffer()  # Flush any pending data
@@ -362,29 +360,60 @@ class HighFrequencyCollector:
                 await asyncio.sleep(5)
     
     def rest_poller(self, interval_ms: float = 100):
-        """High-frequency REST polling as fallback."""
+        """High-frequency REST polling with market rotation checks."""
         logger.info(f"Starting REST poller ({interval_ms}ms interval)")
         
         while self.running:
             start = time.time()
             
+            # Check for hourly DB rotation
+            self.check_rotation()
+            
+            # Check for new market window (every 5 minutes)
+            self._check_market_rotation()
+            
             market = self.get_current_market()
             if market:
-                # Poll both up and down tokens
+                # Poll up token
                 if market.get('up_token_id'):
-                    update = self.fetch_rest_snapshot(market['up_token_id'], 'up')
-                    if update:
-                        self.buffer_update(update)
+                    try:
+                        update = self.fetch_rest_snapshot(market['up_token_id'], 'up')
+                        if update:
+                            self.buffer_update(update)
+                    except Exception as e:
+                        logger.debug(f"Up poll error: {e}")
                 
+                # Poll down token
                 if market.get('down_token_id'):
-                    update = self.fetch_rest_snapshot(market['down_token_id'], 'down')
-                    if update:
-                        self.buffer_update(update)
+                    try:
+                        update = self.fetch_rest_snapshot(market['down_token_id'], 'down')
+                        if update:
+                            self.buffer_update(update)
+                    except Exception as e:
+                        logger.debug(f"Down poll error: {e}")
             
             # Sleep for remaining interval
             elapsed = (time.time() - start) * 1000
             sleep_time = max(0, (interval_ms - elapsed) / 1000)
-            time.sleep(sleep_time)
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+    
+    def _check_market_rotation(self):
+        """Check if we need to fetch new market tokens (new 5-min window)."""
+        now = int(time.time())
+        current_window = (now // 300) * 300
+        
+        # Check if we have this window's tokens
+        cursor = self.conn.execute(
+            "SELECT 1 FROM markets WHERE timestamp = ?",
+            (current_window,)
+        )
+        if not cursor.fetchone():
+            # New window - clear cache to force refresh
+            logger.info(f"New market window detected: {current_window}")
+            # Force get_current_market to fetch new tokens
+            self.conn.execute("DELETE FROM markets WHERE timestamp < ?", (current_window - 600,))
+            self.conn.commit()
     
     def db_flusher(self, interval_sec: float = 5):
         """Periodically flush buffer to database."""
@@ -393,9 +422,7 @@ class HighFrequencyCollector:
         while self.running:
             time.sleep(interval_sec)
             
-            # Check for 12-hour rotation
-            self.check_rotation()
-            
+            # Note: Hourly rotation is now checked in rest_poller for faster response
             self.flush_buffer()
             
             # Log stats
