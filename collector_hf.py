@@ -242,17 +242,19 @@ class HighFrequencyCollector:
             ''', (current_window, 'BTC', slug, int(time.time()), up_token, down_token))
             self.conn.commit()
             
-            self.current_market = {
-                'timestamp': current_window,
-                'asset': 'BTC',
-                'up_token_id': up_token,
-                'down_token_id': down_token
-            }
-            self.market_refresh_time = time.time()
+            with self.market_lock:
+                self.current_market = {
+                    'timestamp': current_window,
+                    'asset': 'BTC',
+                    'up_token_id': up_token,
+                    'down_token_id': down_token
+                }
+                self.market_refresh_time = time.time()
             return self.current_market
         except Exception as e:
             logger.warning(f"Error fetching market: {e}")
-            return self.current_market  # Return cached even if stale
+            with self.market_lock:
+                return self.current_market  # Return cached even if stale
     
     def fetch_rest_snapshot(self, token_id: str, side: str) -> Optional[PriceUpdate]:
         """Fetch current orderbook via REST - using Gamma API for real prices."""
