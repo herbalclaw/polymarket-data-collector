@@ -132,9 +132,10 @@ class HighFrequencyCollector:
             self.conn.execute("PRAGMA synchronous=NORMAL")
             self._init_tables()
             self.last_prices.clear()
-            # CRITICAL: Reset market cache on rotation
-            self.current_market = None
-            self.market_refresh_time = 0
+            # CRITICAL: Reset market cache with lock on rotation
+            with self.market_lock:
+                self.current_market = None
+                self.market_refresh_time = 0
             return True
         return False
         
@@ -443,9 +444,10 @@ class HighFrequencyCollector:
             # Force get_current_market to fetch new tokens
             self.conn.execute("DELETE FROM markets WHERE timestamp < ?", (current_window - 600,))
             self.conn.commit()
-            # CRITICAL: Clear market cache
-            self.current_market = None
-            self.market_refresh_time = 0
+            # CRITICAL: Clear market cache with lock
+            with self.market_lock:
+                self.current_market = None
+                self.market_refresh_time = 0
     
     def db_flusher(self, interval_sec: float = 5):
         """Periodically flush buffer to database."""
