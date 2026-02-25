@@ -393,34 +393,49 @@ class HighFrequencyCollector:
         """High-frequency REST polling with market rotation checks."""
         logger.info(f"Starting REST poller ({interval_ms}ms interval)")
         
+        consecutive_errors = 0
+        
         while self.running:
             start = time.time()
             
-            # Check for hourly DB rotation
-            self.check_rotation()
-            
-            # Check for new market window (every 5 minutes)
-            self._check_market_rotation()
-            
-            market = self.get_current_market()
-            if market:
-                # Poll up token
-                if market.get('up_token_id'):
-                    try:
-                        update = self.fetch_rest_snapshot(market['up_token_id'], 'up')
-                        if update:
-                            self.buffer_update(update)
-                    except Exception as e:
-                        logger.debug(f"Up poll error: {e}")
+            try:
+                # Check for hourly DB rotation
+                self.check_rotation()
                 
-                # Poll down token
-                if market.get('down_token_id'):
-                    try:
-                        update = self.fetch_rest_snapshot(market['down_token_id'], 'down')
-                        if update:
-                            self.buffer_update(update)
-                    except Exception as e:
-                        logger.debug(f"Down poll error: {e}")
+                # Check for new market window (every 5 minutes)
+                self._check_market_rotation()
+                
+                market = self.get_current_market()
+                if market:
+                    # Poll up token
+                    if market.get('up_token_id'):
+                        try:
+                            update = self.fetch_rest_snapshot(market['up_token_id'], 'up')
+                            if update:
+                                self.buffer_update(update)
+                        except Exception as e:
+                            logger.warning(f"Up poll error: {e}")
+                    
+                    # Poll down token
+                    if market.get('down_token_id'):
+                        try:
+                            update = self.fetch_rest_snapshot(market['down_token_id'], 'down')
+                            if update:
+                                self.buffer_update(update)
+                        except Exception as e:
+                            logger.warning(f"Down poll error: {e}")
+                    
+                    # Reset error counter on success
+                    consecutive_errors = 0
+                else:
+                    logger.warning("No market available for polling")
+                    
+            except Exception as e:
+                consecutive_errors += 1
+                logger.error(f"REST poller error (consecutive: {consecutive_errors}): {e}")
+                if consecutive_errors > 10:
+                    logger.error("Too many consecutive errors, stopping poller")
+                    break
             
             # Sleep for remaining interval
             elapsed = (time.time() - start) * 1000
