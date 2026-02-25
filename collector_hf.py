@@ -192,9 +192,10 @@ class HighFrequencyCollector:
         current_window = (now // 300) * 300
         
         # CRITICAL: Check cache first (with 10-second TTL for active rotation)
-        if self.current_market and self.current_market.get('timestamp') == current_window:
-            if time.time() - self.market_refresh_time < 10:
-                return self.current_market
+        with self.market_lock:
+            if self.current_market and self.current_market.get('timestamp') == current_window:
+                if time.time() - self.market_refresh_time < 10:
+                    return self.current_market
         
         # Check database cache
         cursor = self.conn.execute(
@@ -203,13 +204,14 @@ class HighFrequencyCollector:
         )
         row = cursor.fetchone()
         if row:
-            self.current_market = {
-                'timestamp': row[0],
-                'asset': row[1],
-                'up_token_id': row[6],
-                'down_token_id': row[7]
-            }
-            self.market_refresh_time = time.time()
+            with self.market_lock:
+                self.current_market = {
+                    'timestamp': row[0],
+                    'asset': row[1],
+                    'up_token_id': row[6],
+                    'down_token_id': row[7]
+                }
+                self.market_refresh_time = time.time()
             return self.current_market
         
         # Fetch from API
