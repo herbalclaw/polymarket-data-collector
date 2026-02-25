@@ -85,6 +85,9 @@ class HighFrequencyCollector:
         self.price_buffer: deque = deque(maxlen=10000)
         self.buffer_lock = threading.Lock()
         
+        # Thread safety for market cache
+        self.market_lock = threading.Lock()
+        
         # Track last prices to avoid duplicates
         self.last_prices: Dict[str, dict] = {}
         
